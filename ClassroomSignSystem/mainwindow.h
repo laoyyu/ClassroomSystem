@@ -28,7 +28,9 @@ private slots:
     void filterData(const QString &text);
     void updateCurrentTime();
     void scrollAnnouncement();
+    void scrollBottomNotification();
     void loadAnnouncement();
+    void loadNotifications();
 
 private:
     void setupUi();
@@ -42,6 +44,7 @@ private:
     QLabel *lblStatus;
     QLabel *lblAnnouncement;
     QLabel *lblCurrentTime;
+    QLabel *lblBottomNotification;
 
     QLineEdit *searchBox;
     QTableView *tableView;
@@ -53,9 +56,12 @@ private:
     QThread *workerThread;
     QTimer *scrollTimer;
     QTimer *timeTimer;
+    QTimer *bottomScrollTimer;
 
     QString announcementText;
     int scrollPosition;
+    QString notificationText;
+    int bottomScrollPosition;
 };
 
 #endif // MAINWINDOW_H
