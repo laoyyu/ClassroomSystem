@@ -57,8 +57,6 @@ MainWindow::~MainWindow()
 }
 
 void MainWindow::setupUi() {
-    QHBoxLayout *mainLayout = new QHBoxLayout(this);
-
     QGroupBox *infoGroup = new QGroupBox("智慧教室班牌 - Class 101");
     QVBoxLayout *infoLayout = new QVBoxLayout;
 
@@ -145,21 +143,22 @@ void MainWindow::setupUi() {
     rightLayout->addWidget(lblAnnouncement);
     rightLayout->addWidget(tabWidget);
 
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    QVBoxLayout *overallLayout = new QVBoxLayout(this);
 
     QHBoxLayout *contentLayout = new QHBoxLayout();
     contentLayout->addWidget(infoGroup, 1);
     contentLayout->addLayout(rightLayout, 2);
 
-    mainLayout->addLayout(contentLayout);
+    overallLayout->addLayout(contentLayout);
 
     lblBottomNotification = new QLabel();
     lblBottomNotification->setStyleSheet("background-color: #2c3e50; color: #ecf0f1; padding: 15px; font-size: 16px; font-weight: bold;");
     lblBottomNotification->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     lblBottomNotification->setMinimumHeight(50);
     lblBottomNotification->setWordWrap(false);
+    lblBottomNotification->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    mainLayout->addWidget(lblBottomNotification);
+    overallLayout->addWidget(lblBottomNotification);
 
     resize(1400, 800);
 }
@@ -288,21 +287,17 @@ void MainWindow::scrollBottomNotification() {
         return;
     }
 
-    QFontMetrics fm(lblBottomNotification->font());
-    int textWidth = fm.horizontalAdvance(notificationText);
-    int labelWidth = lblBottomNotification->width();
-
-    if (textWidth > labelWidth) {
-        bottomScrollPosition += 3;
-        if (bottomScrollPosition > textWidth) {
-            bottomScrollPosition = -labelWidth;
-        }
-        lblBottomNotification->setText(notificationText.right(textWidth - bottomScrollPosition) + "    ★    " + notificationText);
+    bottomScrollPosition++;
+    if (bottomScrollPosition >= notificationText.length()) {
+        bottomScrollPosition = 0;
     }
+
+    QString displayText = notificationText.mid(bottomScrollPosition) + notificationText.left(bottomScrollPosition);
+    lblBottomNotification->setText(displayText);
 }
 
 void MainWindow::loadNotifications() {
-    notificationText = "📢 重要通知：期末考试将于2026年1月15日开始，请同学们提前做好准备！    ★    📢 图书馆开放时间调整：周一至周五 8:00-22:00，周末 9:00-21:00    ★    📢 校园网维护通知：本周六凌晨2:00-6:00进行系统升级，期间网络可能不稳定    ★    📢 寒假放假安排：2026年1月20日-2月20日，请同学们注意安全    ★    📢 新学期选课通知：下学期选课系统将于1月10日开放，请及时关注教务处网站";
+    notificationText = "📢 期末考试1月15日开始  ★  图书馆8:00-22:00  ★  周六凌晨网络维护  ★  寒假1月20日-2月20日  ★  选课1月10日开放  ★  请同学们注意考试时间  ★  祝大家考试顺利  ★  考试期间请保持安静  ★  提前30分钟到达考场  ★  携带好准考证和身份证  ★  ";
     bottomScrollPosition = 0;
     lblBottomNotification->setText(notificationText);
 }
