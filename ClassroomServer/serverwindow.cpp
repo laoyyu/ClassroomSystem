@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QDateTime>
+#include <QHostAddress>
+#include <QObject>
 
 ServerWindow::ServerWindow(QWidget *parent) : QWidget(parent)
 {
@@ -44,44 +46,24 @@ void ServerWindow::initDb() {
         return;
     }
 
-    // 创建表并插入初始数据（模拟教务系统排课）
+    // 创建表（如果不存在）
     QSqlQuery query(db);
     query.exec("CREATE TABLE IF NOT EXISTS master_schedules ("
                "room TEXT, course TEXT, teacher TEXT, time_slot TEXT, is_next INTEGER)");
 
-    // 每次重启先清空，写入模拟数据
-    query.exec("DELETE FROM master_schedules");
+    query.exec("CREATE TABLE IF NOT EXISTS classrooms ("
+               "room_name TEXT, class_name TEXT, capacity INTEGER, building TEXT, floor INTEGER)");
 
-    QString insertSql = "INSERT INTO master_schedules VALUES (?, ?, ?, ?, ?)";
+    query.exec("CREATE TABLE IF NOT EXISTS announcements ("
+               "title TEXT, content TEXT, priority INTEGER, publish_time TEXT, expire_time TEXT)");
 
-    // 模拟数据 1：101教室当前课
-    query.prepare(insertSql);
-    query.addBindValue("Class 101");
-    query.addBindValue("服务器分发的数学课");
-    query.addBindValue("王教授(Server)");
-    query.addBindValue(QDateTime::currentDateTime().toString("HH:mm") + " - " + QDateTime::currentDateTime().addSecs(3600).toString("HH:mm"));
-    query.addBindValue(0);
-    query.exec();
-
-    // 模拟数据 2：101教室下节课
-    query.prepare(insertSql);
-    query.addBindValue("Class 101");
-    query.addBindValue("服务器分发的英语课");
-    query.addBindValue("李老师(Server)");
-    query.addBindValue("14:00 - 15:30");
-    query.addBindValue(1);
-    query.exec();
-
-    // 模拟数据 3：102教室
-    query.prepare(insertSql);
-    query.addBindValue("Class 102");
-    query.addBindValue("物理实验");
-    query.addBindValue("陈工");
-    query.addBindValue("09:00 - 12:00");
-    query.addBindValue(0);
-    query.exec();
-
-    logViewer->append("服务端数据库已重置并生成模拟数据。");
+    // 检查是否有数据，如果没有则初始化
+    query.exec("SELECT COUNT(*) FROM master_schedules");
+    if (query.next() && query.value(0).toInt() == 0) {
+        logViewer->append("数据库为空，请运行 init_db.py 初始化数据");
+    } else {
+        logViewer->append("服务端数据库已连接，现有记录数: " + query.value(0).toString());
+    }
 }
 
 void ServerWindow::onNewConnection() {
@@ -96,31 +78,80 @@ void ServerWindow::onReadClientData() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (!socket) return;
 
-    // 简单协议：只要客户端发来任何数据，我们就把整个课表吐给它
     QByteArray request = socket->readAll();
-    logViewer->append("收到请求，正在发送数据...");
+    logViewer->append("收到请求: " + request);
+    logViewer->append("正在准备发送数据...");
 
     QByteArray responseData = getScheduleJson();
-    socket->write(responseData);
+    responseData.append('\n');
+
+    logViewer->append("数据大小: " + QString::number(responseData.size()) + " 字节");
+
+    qint64 bytesWritten = socket->write(responseData);
     socket->flush();
-    // socket->disconnectFromHost(); // 发送完可以主动断开，也可以等客户端断开
+
+    logViewer->append("已发送 " + QString::number(bytesWritten) + " 字节");
+
+    socket->disconnectFromHost();
 }
 
 QByteArray ServerWindow::getScheduleJson() {
-    QSqlQuery query(db);
-    query.exec("SELECT room, course, teacher, time_slot, is_next FROM master_schedules");
+    QJsonObject rootObj;
 
-    QJsonArray jsonArray;
-    while (query.next()) {
-        QJsonObject obj;
-        obj["room"] = query.value(0).toString();
-        obj["course"] = query.value(1).toString();
-        obj["teacher"] = query.value(2).toString();
-        obj["time"] = query.value(3).toString();
-        obj["is_next"] = query.value(4).toInt();
-        jsonArray.append(obj);
+    QJsonArray schedulesArray;
+    QSqlQuery schedulesQuery(db);
+    if (!schedulesQuery.exec("SELECT room, course, teacher, time_slot, is_next FROM master_schedules")) {
+        logViewer->append("查询课程表失败: " + schedulesQuery.lastError().text());
     }
+    while (schedulesQuery.next()) {
+        QJsonObject obj;
+        obj["room_name"] = schedulesQuery.value(0).toString();
+        obj["course_name"] = schedulesQuery.value(1).toString();
+        obj["teacher"] = schedulesQuery.value(2).toString();
+        obj["time_slot"] = schedulesQuery.value(3).toString();
+        obj["is_next"] = schedulesQuery.value(4).toInt();
+        schedulesArray.append(obj);
+    }
+    logViewer->append("课程表记录数: " + QString::number(schedulesArray.size()));
+    rootObj["schedules"] = schedulesArray;
 
-    QJsonDocument doc(jsonArray);
-    return doc.toJson();
+    QJsonArray classroomsArray;
+    QSqlQuery classroomsQuery(db);
+    if (!classroomsQuery.exec("SELECT room_name, class_name, capacity, building, floor FROM classrooms")) {
+        logViewer->append("查询教室信息失败: " + classroomsQuery.lastError().text());
+    }
+    while (classroomsQuery.next()) {
+        QJsonObject obj;
+        obj["room_name"] = classroomsQuery.value(0).toString();
+        obj["class_name"] = classroomsQuery.value(1).toString();
+        obj["capacity"] = classroomsQuery.value(2).toInt();
+        obj["building"] = classroomsQuery.value(3).toString();
+        obj["floor"] = classroomsQuery.value(4).toInt();
+        classroomsArray.append(obj);
+    }
+    logViewer->append("教室信息记录数: " + QString::number(classroomsArray.size()));
+    rootObj["classrooms"] = classroomsArray;
+
+    QJsonArray announcementsArray;
+    QSqlQuery announcementsQuery(db);
+    if (!announcementsQuery.exec("SELECT title, content, priority, publish_time, expire_time FROM announcements")) {
+        logViewer->append("查询公告失败: " + announcementsQuery.lastError().text());
+    }
+    while (announcementsQuery.next()) {
+        QJsonObject obj;
+        obj["title"] = announcementsQuery.value(0).toString();
+        obj["content"] = announcementsQuery.value(1).toString();
+        obj["priority"] = announcementsQuery.value(2).toInt();
+        obj["publish_time"] = announcementsQuery.value(3).toString();
+        obj["expire_time"] = announcementsQuery.value(4).toString();
+        announcementsArray.append(obj);
+    }
+    logViewer->append("公告记录数: " + QString::number(announcementsArray.size()));
+    rootObj["announcements"] = announcementsArray;
+
+    QJsonDocument doc(rootObj);
+    QByteArray jsonData = doc.toJson();
+    logViewer->append("JSON数据预览: " + jsonData.left(100) + "...");
+    
+    return jsonData;
 }

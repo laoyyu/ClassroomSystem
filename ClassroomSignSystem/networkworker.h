@@ -26,7 +26,9 @@ private slots:
 
 private:
     void updateLocalDb(const QByteArray &jsonData);
-    void saveSchedules(const QJsonArray &array); // 解析JSON并存库
+    void saveSchedules(const QJsonArray &array);
+    void saveClassrooms(const QJsonArray &array);
+    void saveAnnouncements(const QJsonArray &array);
 
     QTcpSocket *socket;
     QTimer *retryTimer; // 用于断线重连或定时刷新

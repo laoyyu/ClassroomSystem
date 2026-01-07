@@ -12,9 +12,9 @@ qt_add_executable(ClassroomSignSystem
     mainwindow.cpp
     mainwindow.h
     mainwindow.ui
-    DatabaseManager.h    # 确保包含数据库管理头文件
-    NetworkWorker.h      # 【修改点 2】：添加网络线程头文件
-    NetworkWorker.cpp    # 【修改点 2】：添加网络线程源文件
+    DatabaseManager.h
+    networkworker.h
+    networkworker.cpp
 )
 
 target_link_libraries(ClassroomSignSystem

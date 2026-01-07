@@ -1,6 +1,6 @@
-#include "MainWindow.h"
+#include "mainwindow.h"
 #include "DatabaseManager.h"
-#include "NetworkWorker.h"
+#include "networkworker.h"
 #include <QDateTime>
 #include <QTimer>
 #include <QSqlQuery>
@@ -10,10 +10,21 @@
 MainWindow::MainWindow(QWidget *parent)
     : QWidget(parent), scrollPosition(0)
 {
-    DatabaseManager::initDb();
+    qDebug() << "MainWindow构造函数开始";
 
+    if (!DatabaseManager::initDb()) {
+        qDebug() << "数据库初始化失败";
+    } else {
+        qDebug() << "数据库初始化成功";
+    }
+
+    qDebug() << "开始设置UI";
     setupUi();
+
+    qDebug() << "开始设置Model";
     setupModel();
+
+    qDebug() << "开始启动Worker";
     startWorker();
 
     timeTimer = new QTimer(this);
@@ -24,7 +35,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(scrollTimer, &QTimer::timeout, this, &MainWindow::scrollAnnouncement);
     scrollTimer->start(200);
 
+    qDebug() << "开始更新显示";
     updateCurrentTime();
+    updateDisplay();
+    loadAnnouncement();
+
+    qDebug() << "MainWindow构造函数完成";
 }
 
 MainWindow::~MainWindow()
@@ -109,7 +125,7 @@ void MainWindow::setupUi() {
     QWidget *classroomTab = new QWidget();
     QVBoxLayout *classroomLayout = new QVBoxLayout(classroomTab);
 
-    QTableView *classroomView = new QTableView();
+    classroomView = new QTableView();
     classroomView->setAlternatingRowColors(true);
     classroomView->setSelectionBehavior(QAbstractItemView::SelectRows);
     classroomView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -152,11 +168,8 @@ void MainWindow::setupModel() {
     classroomModel->setHeaderData(5, Qt::Horizontal, "楼层");
     classroomModel->select();
 
-    QTableView *classroomView = findChild<QTableView*>();
-    if (classroomView && classroomView != tableView) {
-        classroomView->setModel(classroomModel);
-        classroomView->hideColumn(0);
-    }
+    classroomView->setModel(classroomModel);
+    classroomView->hideColumn(0);
 }
 
 void MainWindow::startWorker() {
@@ -237,5 +250,17 @@ void MainWindow::scrollAnnouncement() {
             scrollPosition = -labelWidth;
         }
         lblAnnouncement->setText(announcementText.right(textWidth - scrollPosition) + "    " + announcementText);
+    }
+}
+
+void MainWindow::loadAnnouncement() {
+    QSqlQuery query;
+    query.prepare("SELECT title, content FROM announcements ORDER BY priority DESC, publish_time DESC LIMIT 1");
+    if (query.exec() && query.next()) {
+        QString title = query.value(0).toString();
+        QString content = query.value(1).toString();
+        announcementText = "【" + title + "】" + content;
+        scrollPosition = 0;
+        lblAnnouncement->setText(announcementText);
     }
 }

@@ -28,6 +28,7 @@ private slots:
     void filterData(const QString &text);
     void updateCurrentTime();
     void scrollAnnouncement();
+    void loadAnnouncement();
 
 private:
     void setupUi();
@@ -44,6 +45,7 @@ private:
 
     QLineEdit *searchBox;
     QTableView *tableView;
+    QTableView *classroomView;
 
     QSqlTableModel *model;
     QSqlTableModel *classroomModel;
