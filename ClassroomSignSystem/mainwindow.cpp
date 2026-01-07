@@ -98,6 +98,7 @@ void MainWindow::setupUi() {
     lblAnnouncement->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     lblAnnouncement->setMinimumHeight(40);
     lblAnnouncement->setWordWrap(false);
+    lblAnnouncement->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     QTabWidget *tabWidget = new QTabWidget();
 
@@ -138,6 +139,7 @@ void MainWindow::setupUi() {
 
     tabWidget->addTab(scheduleTab, "课程表");
     tabWidget->addTab(classroomTab, "教室信息");
+    tabWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QVBoxLayout *rightLayout = new QVBoxLayout();
     rightLayout->addWidget(lblAnnouncement);
