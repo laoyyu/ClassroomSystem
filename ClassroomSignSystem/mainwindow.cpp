@@ -6,6 +6,7 @@
 #include <QSqlQuery>
 #include <QTabWidget>
 #include <QSplitter>
+#include <QComboBox>
 
 MainWindow::MainWindow(QWidget *parent)
     : QWidget(parent), scrollPosition(0)
@@ -41,6 +42,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     qDebug() << "开始更新显示";
     updateCurrentTime();
+    loadClassrooms();
     updateDisplay();
     loadAnnouncement();
     loadNotifications();
@@ -57,11 +59,20 @@ MainWindow::~MainWindow()
 }
 
 void MainWindow::setupUi() {
-    QGroupBox *infoGroup = new QGroupBox("智慧教室班牌 - Class 101");
+    QGroupBox *infoGroup = new QGroupBox("智慧教室班牌");
     QVBoxLayout *infoLayout = new QVBoxLayout;
 
+    QHBoxLayout *titleLayout = new QHBoxLayout;
+    titleLayout->addWidget(new QLabel("当前班级:"));
+    classroomComboBox = new QComboBox();
+    classroomComboBox->setStyleSheet("font-size: 14px; padding: 5px; min-width: 150px;");
+    titleLayout->addWidget(classroomComboBox);
+    titleLayout->addStretch();
+
+    connect(classroomComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onClassroomChanged);
+
     lblCurrentTime = new QLabel();
-    lblCurrentTime->setStyleSheet("font-size: 16px; color: #3498db; font-weight: bold;");
+    lblCurrentTime->setStyleSheet("font-size: 16px; color: #2c3e50; font-weight: bold;");
     lblCurrentTime->setAlignment(Qt::AlignCenter);
 
     lblCourseName = new QLabel("Loading...");
@@ -84,6 +95,7 @@ void MainWindow::setupUi() {
     lblNextCourse->setStyleSheet("font-size: 16px; color: #16a085; font-style: italic; padding: 10px;");
     lblNextCourse->setAlignment(Qt::AlignCenter);
 
+    infoLayout->addLayout(titleLayout);
     infoLayout->addWidget(lblCurrentTime);
     infoLayout->addWidget(lblCourseName);
     infoLayout->addWidget(lblTeacher);
@@ -213,6 +225,7 @@ void MainWindow::onDataSynced(const QString &msg) {
     model->select();
     classroomModel->select();
 
+    loadClassrooms();
     updateDisplay();
 }
 
@@ -222,10 +235,20 @@ void MainWindow::onAnnouncementUpdated(const QString &title, const QString &cont
     lblAnnouncement->setText(announcementText);
 }
 
-void MainWindow::updateDisplay() {
+void MainWindow::updateDisplay(const QString &roomName) {
+    QString currentRoomName = roomName;
+    if (currentRoomName.isEmpty() && classroomComboBox->count() > 0) {
+        currentRoomName = classroomComboBox->currentData().toString();
+    }
+    
+    if (currentRoomName.isEmpty()) {
+        currentRoomName = "Class 101";
+    }
+
     QSqlQuery query;
 
-    query.prepare("SELECT course_name, teacher, time_slot FROM schedules WHERE room_name = 'Class 101' AND is_next = 0 LIMIT 1");
+    query.prepare("SELECT course_name, teacher, time_slot FROM schedules WHERE room_name = ? AND is_next = 0 LIMIT 1");
+    query.addBindValue(currentRoomName);
     if(query.exec() && query.next()) {
         lblCourseName->setText(query.value(0).toString());
         lblTeacher->setText("教师: " + query.value(1).toString());
@@ -236,7 +259,8 @@ void MainWindow::updateDisplay() {
         lblTime->setText("");
     }
 
-    query.prepare("SELECT course_name, time_slot FROM schedules WHERE room_name = 'Class 101' AND is_next = 1 LIMIT 1");
+    query.prepare("SELECT course_name, time_slot FROM schedules WHERE room_name = ? AND is_next = 1 LIMIT 1");
+    query.addBindValue(currentRoomName);
     if(query.exec() && query.next()) {
         lblNextCourse->setText("下节预告: " + query.value(0).toString() + " (" + query.value(1).toString() + ")");
     } else {
@@ -302,4 +326,27 @@ void MainWindow::loadNotifications() {
     notificationText = "📢 期末考试1月15日开始  ★  图书馆8:00-22:00  ★  周六凌晨网络维护  ★  寒假1月20日-2月20日  ★  选课1月10日开放  ★  请同学们注意考试时间  ★  祝大家考试顺利  ★  考试期间请保持安静  ★  提前30分钟到达考场  ★  携带好准考证和身份证  ★  ";
     bottomScrollPosition = 0;
     lblBottomNotification->setText(notificationText);
+}
+
+void MainWindow::loadClassrooms() {
+    QSqlQuery query;
+    query.prepare("SELECT room_name, class_name FROM classrooms ORDER BY room_name");
+    if (query.exec()) {
+        classroomComboBox->clear();
+        while (query.next()) {
+            QString roomName = query.value(0).toString();
+            QString className = query.value(1).toString();
+            classroomComboBox->addItem(roomName + " - " + className, roomName);
+        }
+        if (classroomComboBox->count() > 0) {
+            classroomComboBox->setCurrentIndex(0);
+        }
+    }
+}
+
+void MainWindow::onClassroomChanged(int index) {
+    if (index >= 0) {
+        QString roomName = classroomComboBox->currentData().toString();
+        updateDisplay(roomName);
+    }
 }

@@ -12,6 +12,7 @@
 #include <QHeaderView>
 #include <QThread>
 #include <QTimer>
+#include <QComboBox>
 
 class MainWindow : public QWidget
 {
@@ -22,7 +23,7 @@ public:
     ~MainWindow();
 
 private slots:
-    void updateDisplay();
+    void updateDisplay(const QString &roomName = QString());
     void onDataSynced(const QString &msg);
     void onAnnouncementUpdated(const QString &title, const QString &content);
     void filterData(const QString &text);
@@ -31,11 +32,13 @@ private slots:
     void scrollBottomNotification();
     void loadAnnouncement();
     void loadNotifications();
+    void onClassroomChanged(int index);
 
 private:
     void setupUi();
     void setupModel();
     void startWorker();
+    void loadClassrooms();
 
     QLabel *lblCourseName;
     QLabel *lblTeacher;
@@ -47,6 +50,7 @@ private:
     QLabel *lblBottomNotification;
 
     QLineEdit *searchBox;
+    QComboBox *classroomComboBox;
     QTableView *tableView;
     QTableView *classroomView;
 
