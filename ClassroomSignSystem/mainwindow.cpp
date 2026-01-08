@@ -72,19 +72,19 @@ void MainWindow::setupUi() {
     connect(classroomComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onClassroomChanged);
 
     lblCurrentTime = new QLabel();
-    lblCurrentTime->setStyleSheet("font-size: 16px; color: #2c3e50; font-weight: bold;");
+    lblCurrentTime->setStyleSheet("font-size: 14px; color: #2c3e50; font-weight: bold;");
     lblCurrentTime->setAlignment(Qt::AlignCenter);
 
     lblCourseName = new QLabel("Loading...");
-    lblCourseName->setStyleSheet("font-size: 36px; font-weight: bold; color: #2c3e50; padding: 20px;");
+    lblCourseName->setStyleSheet("font-size: 28px; font-weight: bold; color: #2c3e50; padding: 15px;");
     lblCourseName->setAlignment(Qt::AlignCenter);
 
     lblTeacher = new QLabel("教师: --");
-    lblTeacher->setStyleSheet("font-size: 22px; color: #e74c3c; padding: 10px;");
+    lblTeacher->setStyleSheet("font-size: 18px; color: #e74c3c; padding: 8px;");
     lblTeacher->setAlignment(Qt::AlignCenter);
 
     lblTime = new QLabel("时间: --");
-    lblTime->setStyleSheet("font-size: 18px; color: #7f8c8d; padding: 5px;");
+    lblTime->setStyleSheet("font-size: 16px; color: #7f8c8d; padding: 5px;");
     lblTime->setAlignment(Qt::AlignCenter);
 
     QFrame *line = new QFrame();
@@ -92,7 +92,7 @@ void MainWindow::setupUi() {
     line->setStyleSheet("background-color: #bdc3c7;");
 
     lblNextCourse = new QLabel("下节预告: --");
-    lblNextCourse->setStyleSheet("font-size: 16px; color: #16a085; font-style: italic; padding: 10px;");
+    lblNextCourse->setStyleSheet("font-size: 14px; color: #16a085; font-style: italic; padding: 8px;");
     lblNextCourse->setAlignment(Qt::AlignCenter);
 
     infoLayout->addLayout(titleLayout);
@@ -174,7 +174,7 @@ void MainWindow::setupUi() {
 
     overallLayout->addWidget(lblBottomNotification);
 
-    resize(1400, 800);
+    resize(1200, 700);
 }
 
 void MainWindow::setupModel() {
