@@ -50,7 +50,8 @@ void ServerWindow::initDb() {
     // 创建表（如果不存在）
     QSqlQuery query(db);
     query.exec("CREATE TABLE IF NOT EXISTS master_schedules ("
-               "room TEXT, course TEXT, teacher TEXT, time_slot TEXT, is_next INTEGER)");
+               "room TEXT, course TEXT, teacher TEXT, time_slot TEXT, "
+               "start_time TEXT, end_time TEXT, weekday INTEGER, is_next INTEGER)");
 
     query.exec("CREATE TABLE IF NOT EXISTS classrooms ("
                "room_name TEXT, class_name TEXT, capacity INTEGER, building TEXT, floor INTEGER)");
@@ -77,47 +78,193 @@ void ServerWindow::initDb() {
 void ServerWindow::initSampleData() {
     QSqlQuery query(db);
     QDateTime now = QDateTime::currentDateTime();
-    QDateTime nextHour = now.addSecs(3600);
-    QString currentTimeSlot = now.toString("HH:mm") + " - " + nextHour.toString("HH:mm");
+    int currentWeekday = now.date().dayOfWeek(); // 1=周一, 7=周日
     
-    // 插入课程表数据（30条）
-    QStringList schedules;
-    schedules << QString("INSERT INTO master_schedules VALUES ('Class 101', '高等数学', '王教授', '%1', 0)").arg(currentTimeSlot);
-    schedules << "INSERT INTO master_schedules VALUES ('Class 101', '大学英语', '李老师', '14:00 - 15:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 102', '大学物理', '陈工', '09:00 - 12:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 102', '线性代数', '张教授', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 103', '计算机基础', '刘老师', '08:00 - 10:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 103', '数据结构', '赵教授', '10:30 - 12:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 104', '有机化学', '孙老师', '09:00 - 11:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 104', '分析化学', '周教授', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 105', '大学语文', '吴老师', '08:30 - 10:30', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 105', '写作与表达', '郑老师', '11:00 - 12:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 201', '概率论', '冯教授', '09:00 - 11:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 201', '数理统计', '陈老师', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 202', '电路原理', '杨教授', '08:00 - 10:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 202', '模拟电子技术', '朱老师', '10:30 - 12:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 203', '操作系统', '钱教授', '09:00 - 11:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 203', '计算机网络', '林老师', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 204', '工程力学', '何教授', '08:30 - 10:30', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 204', '材料力学', '高老师', '11:00 - 12:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 205', '管理学原理', '马老师', '09:00 - 11:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 205', '市场营销', '罗老师', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 301', '数据库系统', '梁教授', '08:00 - 10:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 301', '软件工程', '宋老师', '10:30 - 12:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 302', '人工智能导论', '唐教授', '09:00 - 11:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 302', '机器学习', '许老师', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 303', '数字信号处理', '韩教授', '08:30 - 10:30', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 303', '通信原理', '邓老师', '11:00 - 12:30', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 304', '宏观经济学', '曹老师', '09:00 - 11:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 304', '微观经济学', '彭老师', '14:00 - 16:00', 1)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 305', '法理学', '魏老师', '08:00 - 10:00', 0)";
-    schedules << "INSERT INTO master_schedules VALUES ('Class 305', '宪法学', '谢老师', '10:30 - 12:30', 1)";
+    // 定义一天的课程时间表（共 5 节课）
+    struct TimeSlot {
+        QString start;
+        QString end;
+        QString display;
+    };
     
-    for (const QString &sql : schedules) {
-        if (!query.exec(sql)) {
-            logViewer->append("插入课程失败: " + query.lastError().text());
+    QVector<TimeSlot> timeSlots = {
+        {"08:00", "09:40", "08:00 - 09:40"},  // 第1节
+        {"10:00", "11:40", "10:00 - 11:40"},  // 第2节
+        {"13:30", "15:10", "13:30 - 15:10"},  // 第3节
+        {"15:30", "17:10", "15:30 - 17:10"},  // 第4节
+        {"19:00", "20:40", "19:00 - 20:40"}   // 第5节（晚上）
+    };
+    
+    // 课程模板（为每个教室生成 5 节课）
+    struct CourseTemplate {
+        QString name;
+        QString teacher;
+    };
+    
+    QMap<QString, QVector<CourseTemplate>> coursesPerRoom;
+    
+    // Class 101 - 计算机科学2023级1班
+    coursesPerRoom["Class 101"] = {
+        {"高等数学", "王教授"},
+        {"数据结构", "张老师"},
+        {"大学英语", "李老师"},
+        {"计算机组成原理", "刘教授"},
+        {"编程实践", "赵老师"}
+    };
+    
+    // Class 102 - 计算机科学2023级2班
+    coursesPerRoom["Class 102"] = {
+        {"大学物理", "陈工"},
+        {"线性代数", "张教授"},
+        {"离散数学", "周老师"},
+        {"计算机网络", "吴教授"},
+        {"数据库原理", "郑老师"}
+    };
+    
+    // Class 103 - 软件工程2023级1班
+    coursesPerRoom["Class 103"] = {
+        {"计算机基础", "刘老师"},
+        {"软件工程", "马教授"},
+        {"操作系统", "宋老师"},
+        {"软件测试", "唐教授"},
+        {"项目管理", "韩老师"}
+    };
+    
+    // Class 104 - 软件工程2023级2班
+    coursesPerRoom["Class 104"] = {
+        {"有机化学", "孙老师"},
+        {"分析化学", "周教授"},
+        {"物理化学", "曹老师"},
+        {"化学实验", "彭教授"},
+        {"环境化学", "魏老师"}
+    };
+    
+    // Class 105 - 人工智能2023级1班
+    coursesPerRoom["Class 105"] = {
+        {"大学语文", "吴老师"},
+        {"人工智能导论", "邓教授"},
+        {"机器学习", "谢老师"},
+        {"深度学习", "颜教授"},
+        {"神经网络", "黑老师"}
+    };
+    
+    // Class 201 - 数据科学2023级1班
+    coursesPerRoom["Class 201"] = {
+        {"概率论", "冯教授"},
+        {"数理统计", "陈老师"},
+        {"数据分析", "杨教授"},
+        {"机器学习基础", "朱老师"},
+        {"大数据技术", "陈教授"}
+    };
+    
+    // Class 202 - 数据科学2023级2班
+    coursesPerRoom["Class 202"] = {
+        {"电路原理", "杨教授"},
+        {"模拟电子技术", "朱老师"},
+        {"数字电子技术", "钱教授"},
+        {"信号与系统", "林老师"},
+        {"嵌入式系统", "何教授"}
+    };
+    
+    // Class 203 - 网络安夨2023级1班
+    coursesPerRoom["Class 203"] = {
+        {"操作系统", "钱教授"},
+        {"计算机网络", "林老师"},
+        {"网络安全", "胡教授"},
+        {"密码学", "谢老师"},
+        {"网络攻防", "郭教授"}
+    };
+    
+    // Class 204 - 网络安夨2023级2班
+    coursesPerRoom["Class 204"] = {
+        {"工程力学", "何教授"},
+        {"材料力学", "高老师"},
+        {"结构力学", "梁教授"},
+        {"流体力学", "宋老师"},
+        {"理论力学", "唐教授"}
+    };
+    
+    // Class 205 - 物联网2023级1班
+    coursesPerRoom["Class 205"] = {
+        {"管理学原理", "马老师"},
+        {"市场营销", "罗老师"},
+        {"组织行为学", "许教授"},
+        {"人力资源", "韩老师"},
+        {"战略管理", "郓教授"}
+    };
+    
+    // Class 301 - 计算机科学2024级1班
+    coursesPerRoom["Class 301"] = {
+        {"数据库系统", "梁教授"},
+        {"软件工程", "宋老师"},
+        {"编译原理", "唐教授"},
+        {"算法设计", "许老师"},
+        {"计算机图形学", "韩教授"}
+    };
+    
+    // Class 302 - 计算机科学2024级2班
+    coursesPerRoom["Class 302"] = {
+        {"人工智能导论", "唐教授"},
+        {"机器学习", "许老师"},
+        {"计算机视觉", "韩教授"},
+        {"自然语言处理", "郓老师"},
+        {"智能系统", "曹教授"}
+    };
+    
+    // Class 303 - 软件工程2024级1班
+    coursesPerRoom["Class 303"] = {
+        {"数字信号处理", "韩教授"},
+        {"通信原理", "邓老师"},
+        {"信息论", "曹教授"},
+        {"移动通信", "彭老师"},
+        {"无线网络", "魏教授"}
+    };
+    
+    // Class 304 - 软件工程2024级2班
+    coursesPerRoom["Class 304"] = {
+        {"宏观经济学", "曹老师"},
+        {"微观经济学", "彭老师"},
+        {"计量经济学", "魏教授"},
+        {"金融学", "谢老师"},
+        {"国际经济学", "颜教授"}
+    };
+    
+    // Class 305 - 人工智能2024级1班
+    coursesPerRoom["Class 305"] = {
+        {"法理学", "魏老师"},
+        {"宪法学", "谢老师"},
+        {"民法学", "颜教授"},
+        {"刑法学", "黑老师"},
+        {"行政法学", "白教授"}
+    };
+    
+    // 为每个教室生成课程记录
+    for (auto it = coursesPerRoom.constBegin(); it != coursesPerRoom.constEnd(); ++it) {
+        QString roomName = it.key();
+        QVector<CourseTemplate> courses = it.value();
+        
+        for (int i = 0; i < qMin(courses.size(), timeSlots.size()); ++i) {
+            QString sql = QString(
+                "INSERT INTO master_schedules "
+                "(room, course, teacher, time_slot, start_time, end_time, weekday, is_next) "
+                "VALUES ('%1', '%2', '%3', '%4', '%5', '%6', %7, 0)"
+            ).arg(
+                roomName,
+                courses[i].name,
+                courses[i].teacher,
+                timeSlots[i].display,
+                timeSlots[i].start,
+                timeSlots[i].end,
+                QString::number(currentWeekday)
+            );
+            
+            if (!query.exec(sql)) {
+                logViewer->append("插入课程失败: " + query.lastError().text());
+            }
         }
     }
+    
+    logViewer->append(QString("已生成 %1 个教室的课程表，每个教室 5 节课").arg(coursesPerRoom.size()));
     
     // 插入教室信息（15条）
     QStringList classrooms;
@@ -206,7 +353,7 @@ QByteArray ServerWindow::getScheduleJson() {
 
     QJsonArray schedulesArray;
     QSqlQuery schedulesQuery(db);
-    if (!schedulesQuery.exec("SELECT room, course, teacher, time_slot, is_next FROM master_schedules")) {
+    if (!schedulesQuery.exec("SELECT room, course, teacher, time_slot, start_time, end_time, weekday, is_next FROM master_schedules")) {
         logViewer->append("查询课程表失败: " + schedulesQuery.lastError().text());
     }
     while (schedulesQuery.next()) {
@@ -215,7 +362,10 @@ QByteArray ServerWindow::getScheduleJson() {
         obj["course_name"] = schedulesQuery.value(1).toString();
         obj["teacher"] = schedulesQuery.value(2).toString();
         obj["time_slot"] = schedulesQuery.value(3).toString();
-        obj["is_next"] = schedulesQuery.value(4).toInt();
+        obj["start_time"] = schedulesQuery.value(4).toString();
+        obj["end_time"] = schedulesQuery.value(5).toString();
+        obj["weekday"] = schedulesQuery.value(6).toInt();
+        obj["is_next"] = schedulesQuery.value(7).toInt();
         schedulesArray.append(obj);
     }
     logViewer->append("课程表记录数: " + QString::number(schedulesArray.size()));

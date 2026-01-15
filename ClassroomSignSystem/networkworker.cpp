@@ -226,6 +226,9 @@ void NetworkWorker::saveSchedules(const QJsonArray &array) {
                     "course_name TEXT, "
                     "teacher TEXT, "
                     "time_slot TEXT, "
+                    "start_time TEXT, "
+                    "end_time TEXT, "
+                    "weekday INTEGER, "
                     "is_next INTEGER DEFAULT 0)")) {
         qDebug() << "创建课程表失败:" << query.lastError().text();
         db.rollback();
@@ -233,7 +236,7 @@ void NetworkWorker::saveSchedules(const QJsonArray &array) {
     }
     qDebug() << "已重新创建课程表";
 
-    QString sql = "INSERT INTO schedules (room_name, course_name, teacher, time_slot, is_next) VALUES (?, ?, ?, ?, ?)";
+    QString sql = "INSERT INTO schedules (room_name, course_name, teacher, time_slot, start_time, end_time, weekday, is_next) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     query.prepare(sql);
 
     int successCount = 0;
@@ -244,6 +247,9 @@ void NetworkWorker::saveSchedules(const QJsonArray &array) {
         query.addBindValue(obj["course_name"].toString());
         query.addBindValue(obj["teacher"].toString());
         query.addBindValue(obj["time_slot"].toString());
+        query.addBindValue(obj["start_time"].toString());
+        query.addBindValue(obj["end_time"].toString());
+        query.addBindValue(obj["weekday"].toInt());
         query.addBindValue(obj["is_next"].toInt());
 
         if (!query.exec()) {

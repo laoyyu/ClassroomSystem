@@ -37,6 +37,9 @@ public:
                    "course_name TEXT, "
                    "teacher TEXT, "
                    "time_slot TEXT, "
+                   "start_time TEXT, "
+                   "end_time TEXT, "
+                   "weekday INTEGER, "
                    "is_next INTEGER DEFAULT 0)")) {
             qDebug() << "创建schedules表失败:" << query.lastError();
         } else {

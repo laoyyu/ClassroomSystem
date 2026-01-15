@@ -247,8 +247,11 @@ void MainWindow::setupModel() {
     model->select();
 
     tableView->setModel(model);
-    tableView->hideColumn(0);
-    tableView->hideColumn(5);
+    tableView->hideColumn(0);  // id
+    tableView->hideColumn(5);  // start_time
+    tableView->hideColumn(6);  // end_time
+    tableView->hideColumn(7);  // weekday
+    tableView->hideColumn(8);  // is_next
 
     classroomModel = new QSqlTableModel(this);
     classroomModel->setTable("classrooms");
@@ -320,25 +323,72 @@ void MainWindow::updateDisplay(const QString &roomName) {
     }
 
     QSqlQuery query;
-
-    query.prepare("SELECT course_name, teacher, time_slot FROM schedules WHERE room_name = ? AND is_next = 0 LIMIT 1");
+    QDateTime now = QDateTime::currentDateTime();
+    QString currentTime = now.toString("HH:mm");
+    int currentWeekday = now.date().dayOfWeek();
+    
+    // 查询当前时间段的课程（当前时间在 start_time 和 end_time 之间）
+    query.prepare(
+        "SELECT course_name, teacher, time_slot, start_time, end_time "
+        "FROM schedules "
+        "WHERE room_name = ? AND weekday = ? AND start_time <= ? AND end_time >= ? "
+        "ORDER BY start_time LIMIT 1"
+    );
     query.addBindValue(currentRoomName);
+    query.addBindValue(currentWeekday);
+    query.addBindValue(currentTime);
+    query.addBindValue(currentTime);
+    
     if(query.exec() && query.next()) {
+        // 找到了当前正在进行的课程
         lblCourseName->setText(query.value(0).toString());
         lblTeacher->setText("教师: " + query.value(1).toString());
         lblTime->setText("时间: " + query.value(2).toString());
+        
+        QString currentEndTime = query.value(4).toString();
+        
+        // 查询下一节课（start_time > 当前课程的 end_time）
+        QSqlQuery nextQuery;
+        nextQuery.prepare(
+            "SELECT course_name, time_slot "
+            "FROM schedules "
+            "WHERE room_name = ? AND weekday = ? AND start_time > ? "
+            "ORDER BY start_time LIMIT 1"
+        );
+        nextQuery.addBindValue(currentRoomName);
+        nextQuery.addBindValue(currentWeekday);
+        nextQuery.addBindValue(currentEndTime);
+        
+        if(nextQuery.exec() && nextQuery.next()) {
+            lblNextCourse->setText("下节预告: " + nextQuery.value(0).toString() + " (" + nextQuery.value(1).toString() + ")");
+        } else {
+            lblNextCourse->setText("下节预告: 无");
+        }
     } else {
-        lblCourseName->setText("当前无课");
-        lblTeacher->setText("");
-        lblTime->setText("");
-    }
-
-    query.prepare("SELECT course_name, time_slot FROM schedules WHERE room_name = ? AND is_next = 1 LIMIT 1");
-    query.addBindValue(currentRoomName);
-    if(query.exec() && query.next()) {
-        lblNextCourse->setText("下节预告: " + query.value(0).toString() + " (" + query.value(1).toString() + ")");
-    } else {
-        lblNextCourse->setText("下节预告: 无");
+        // 当前时间没有课，查找下一节课（start_time > 当前时间）
+        query.prepare(
+            "SELECT course_name, teacher, time_slot, start_time "
+            "FROM schedules "
+            "WHERE room_name = ? AND weekday = ? AND start_time > ? "
+            "ORDER BY start_time LIMIT 1"
+        );
+        query.addBindValue(currentRoomName);
+        query.addBindValue(currentWeekday);
+        query.addBindValue(currentTime);
+        
+        if(query.exec() && query.next()) {
+            // 显示下一节课
+            lblCourseName->setText("当前无课");
+            lblTeacher->setText("");
+            lblTime->setText("");
+            lblNextCourse->setText("下节预告: " + query.value(0).toString() + " (" + query.value(2).toString() + ")");
+        } else {
+            // 今天没有更多课程了
+            lblCourseName->setText("当前无课");
+            lblTeacher->setText("");
+            lblTime->setText("");
+            lblNextCourse->setText("下节预告: 无");
+        }
     }
 }
 
@@ -421,6 +471,12 @@ void MainWindow::loadNotifications() {
 }
 
 void MainWindow::loadClassrooms() {
+    // 保存当前选中的值
+    QString currentSelectedRoom = "";
+    if (classroomComboBox->currentIndex() >= 0) {
+        currentSelectedRoom = classroomComboBox->currentData().toString();
+    }
+    
     QSqlQuery query;
     query.prepare("SELECT room_name, class_name FROM classrooms ORDER BY room_name");
     if (query.exec()) {
@@ -430,8 +486,23 @@ void MainWindow::loadClassrooms() {
             QString className = query.value(1).toString();
             classroomComboBox->addItem(roomName + " - " + className, roomName);
         }
-        if (classroomComboBox->count() > 0) {
-            classroomComboBox->setCurrentIndex(0);
+        
+        // 尝试恢复之前选中的值
+        if (!currentSelectedRoom.isEmpty()) {
+            int index = classroomComboBox->findData(currentSelectedRoom);
+            if (index >= 0) {
+                classroomComboBox->setCurrentIndex(index);
+            } else {
+                // 如果找不到之前选中的值，则选择第一个
+                if (classroomComboBox->count() > 0) {
+                    classroomComboBox->setCurrentIndex(0);
+                }
+            }
+        } else {
+            // 如果之前没有选择任何值，且列表不为空，则选择第一个
+            if (classroomComboBox->count() > 0) {
+                classroomComboBox->setCurrentIndex(0);
+            }
         }
     }
 }
