@@ -63,9 +63,69 @@ void MainWindow::setupUi() {
     QVBoxLayout *infoLayout = new QVBoxLayout;
 
     QHBoxLayout *titleLayout = new QHBoxLayout;
-    titleLayout->addWidget(new QLabel("当前班级:"));
+    
+    // 优化标签样式
+    QLabel *lblClassroom = new QLabel("当前教室:");
+    lblClassroom->setStyleSheet("font-size: 15px; font-weight: bold; color: #34495e;");
+    titleLayout->addWidget(lblClassroom);
+    
+    // 优化下拉框样式
     classroomComboBox = new QComboBox();
-    classroomComboBox->setStyleSheet("font-size: 14px; padding: 5px; min-width: 150px;");
+    classroomComboBox->setStyleSheet(
+        "QComboBox {"
+        "    font-size: 15px;"
+        "    padding: 8px 12px;"
+        "    min-width: 280px;"
+        "    border: 2px solid #3498db;"
+        "    border-radius: 8px;"
+        "    background-color: white;"
+        "    color: #2c3e50;"
+        "    font-weight: 500;"
+        "}"
+        "QComboBox:hover {"
+        "    border-color: #2980b9;"
+        "    background-color: #ecf0f1;"
+        "}"
+        "QComboBox:focus {"
+        "    border-color: #2980b9;"
+        "    background-color: #e8f4f8;"
+        "}"
+        "QComboBox::drop-down {"
+        "    border: none;"
+        "    width: 30px;"
+        "}"
+        "QComboBox::down-arrow {"
+        "    image: none;"
+        "    border-left: 5px solid transparent;"
+        "    border-right: 5px solid transparent;"
+        "    border-top: 6px solid #3498db;"
+        "    margin-right: 10px;"
+        "}"
+        "QComboBox QAbstractItemView {"
+        "    border: 2px solid #3498db;"
+        "    border-radius: 5px;"
+        "    background-color: white;"
+        "    selection-background-color: #3498db;"
+        "    selection-color: white;"
+        "    font-size: 14px;"
+        "    padding: 5px;"
+        "    outline: none;"
+        "}"
+        "QComboBox QAbstractItemView::item {"
+        "    min-height: 35px;"
+        "    padding: 8px 12px;"
+        "    border-bottom: 1px solid #ecf0f1;"
+        "}"
+        "QComboBox QAbstractItemView::item:hover {"
+        "    background-color: #e8f4f8;"
+        "    color: #2c3e50;"
+        "}"
+        "QComboBox QAbstractItemView::item:selected {"
+        "    background-color: #3498db;"
+        "    color: white;"
+        "}"
+    );
+    classroomComboBox->setMaxVisibleItems(10);
     titleLayout->addWidget(classroomComboBox);
     titleLayout->addStretch();
 
@@ -231,6 +291,16 @@ void MainWindow::onDataSynced(const QString &msg) {
 
     loadClassrooms();
     updateDisplay();
+    
+    // 同步后自动过滤到当前选中的教室
+    if (classroomComboBox->count() > 0) {
+        QString currentRoom = classroomComboBox->currentData().toString();
+        if (!currentRoom.isEmpty()) {
+            QString filterStr = QString("room_name = '%1'").arg(currentRoom);
+            model->setFilter(filterStr);
+            model->select();
+        }
+    }
 }
 
 void MainWindow::onAnnouncementUpdated(const QString &title, const QString &content) {
@@ -273,13 +343,24 @@ void MainWindow::updateDisplay(const QString &roomName) {
 }
 
 void MainWindow::filterData(const QString &text) {
-    if (text.isEmpty()) {
-        // 搜索框为空，显示所有数据
-        model->setFilter("");
-    } else {
+    // 如果搜索框有内容，优先使用搜索过滤
+    if (!text.isEmpty()) {
         // 正确的 SQL LIKE 语法：使用 % 作为通配符
         QString filterStr = QString("room_name LIKE '%%1%' OR teacher LIKE '%%1%' OR course_name LIKE '%%1%'").arg(text);
         model->setFilter(filterStr);
+    } else {
+        // 搜索框为空，恢复到当前选中的教室过滤
+        if (classroomComboBox->count() > 0) {
+            QString currentRoom = classroomComboBox->currentData().toString();
+            if (!currentRoom.isEmpty()) {
+                QString filterStr = QString("room_name = '%1'").arg(currentRoom);
+                model->setFilter(filterStr);
+            } else {
+                model->setFilter("");
+            }
+        } else {
+            model->setFilter("");
+        }
     }
     model->select();
 }
@@ -358,6 +439,15 @@ void MainWindow::loadClassrooms() {
 void MainWindow::onClassroomChanged(int index) {
     if (index >= 0) {
         QString roomName = classroomComboBox->currentData().toString();
+        
+        // 更新左侧当前课程显示
         updateDisplay(roomName);
+        
+        // 同时过滤右侧课程表，只显示当前教室的课程
+        if (!roomName.isEmpty()) {
+            QString filterStr = QString("room_name = '%1'").arg(roomName);
+            model->setFilter(filterStr);
+            model->select();
+        }
     }
 }
