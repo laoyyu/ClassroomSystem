@@ -8,17 +8,17 @@ server_cursor = server_conn.cursor()
 client_cursor = client_conn.cursor()
 
 # 从服务端读取数据
-server_cursor.execute('SELECT room, course, teacher, time_slot, is_next FROM master_schedules')
+server_cursor.execute('SELECT room, course, teacher, time_slot, start_time, end_time, weekday, is_next FROM master_schedules')
 schedules = server_cursor.fetchall()
 
 # 清空客户端表
 client_cursor.execute('DELETE FROM schedules')
 
 # 插入到客户端（注意字段名不同）
-for row in schedules:
+for room, course, teacher, time_slot, start_time, end_time, weekday, is_next in schedules:
     client_cursor.execute(
-        'INSERT INTO schedules (room_name, course_name, teacher, time_slot, is_next) VALUES (?, ?, ?, ?, ?)',
-        row
+        'INSERT INTO schedules (room_name, course_name, teacher, time_slot, start_time, end_time, weekday, is_next) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        (room, course, teacher, time_slot, start_time, end_time, weekday, is_next)
     )
 
 client_conn.commit()

@@ -52,7 +52,8 @@ public:
                    "class_name TEXT, "
                    "capacity INTEGER, "
                    "building TEXT, "
-                   "floor INTEGER)")) {
+                   "floor INTEGER, "
+                   "current_class TEXT)")) {
             qDebug() << "创建classrooms表失败:" << query.lastError();
         } else {
             qDebug() << "classrooms表创建成功";
@@ -113,10 +114,10 @@ public:
                    "('Class 103', '计算机网络', '刘教授', '08:00-09:40', 0), "
                    "('Class 103', '数据库原理', '陈老师', '10:00-11:40', 1)");
 
-        query.exec("INSERT INTO classrooms (room_name, class_name, capacity, building, floor) VALUES "
-                   "('Class 101', '计算机科学2023级1班', 50, 'A栋', 3), "
-                   "('Class 102', '计算机科学2023级2班', 45, 'A栋', 3), "
-                   "('Class 103', '软件工程2023级1班', 60, 'B栋', 2)");
+        query.exec("INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES "
+                   "('Class 101', '计算机科学2023级1班', 50, 'A栋', 3, ''), "
+                   "('Class 102', '计算机科学2023级2班', 45, 'A栋', 3, ''), "
+                   "('Class 103', '软件工程2023级1班', 60, 'B栋', 2, '')");
 
         query.exec("INSERT INTO announcements (title, content, priority, publish_time, expire_time) VALUES "
                    "('系统通知', '欢迎使用智慧教室班牌系统！本系统提供课程信息查询、教室状态显示等功能。', 1, "
@@ -139,15 +140,16 @@ public:
         return query.exec();
     }
 
-    static bool insertClassroom(const QString &roomName, const QString &className, int capacity, const QString &building, int floor) {
+    static bool insertClassroom(const QString &roomName, const QString &className, int capacity, const QString &building, int floor, const QString &currentClass = "") {
         QSqlQuery query;
-        query.prepare("INSERT OR REPLACE INTO classrooms (room_name, class_name, capacity, building, floor) "
-                     "VALUES (?, ?, ?, ?, ?)");
+        query.prepare("INSERT OR REPLACE INTO classrooms (room_name, class_name, capacity, building, floor, current_class) "
+                     "VALUES (?, ?, ?, ?, ?, ?)");
         query.addBindValue(roomName);
         query.addBindValue(className);
         query.addBindValue(capacity);
         query.addBindValue(building);
         query.addBindValue(floor);
+        query.addBindValue(currentClass);
         return query.exec();
     }
 

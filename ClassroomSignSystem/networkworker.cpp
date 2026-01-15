@@ -292,14 +292,15 @@ void NetworkWorker::saveClassrooms(const QJsonArray &array) {
                     "class_name TEXT, "
                     "capacity INTEGER, "
                     "building TEXT, "
-                    "floor INTEGER)")) {
+                    "floor INTEGER, "
+                    "current_class TEXT)")) {
         qDebug() << "创建教室表失败:" << query.lastError().text();
         db.rollback();
         return;
     }
     qDebug() << "已重新创建教室表";
 
-    QString sql = "INSERT INTO classrooms (room_name, class_name, capacity, building, floor) VALUES (?, ?, ?, ?, ?)";
+    QString sql = "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES (?, ?, ?, ?, ?, ?)";
     query.prepare(sql);
 
     int successCount = 0;
@@ -311,6 +312,7 @@ void NetworkWorker::saveClassrooms(const QJsonArray &array) {
         query.addBindValue(obj["capacity"].toInt());
         query.addBindValue(obj["building"].toString());
         query.addBindValue(obj["floor"].toInt());
+        query.addBindValue(obj["current_class"].toString());
 
         if (!query.exec()) {
             qDebug() << "插入教室数据失败:" << query.lastError().text();

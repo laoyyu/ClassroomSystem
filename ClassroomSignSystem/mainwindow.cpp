@@ -350,38 +350,72 @@ void MainWindow::updateDisplay(const QString &roomName) {
         // 查询下一节课（start_time > 当前课程的 end_time）
         QSqlQuery nextQuery;
         nextQuery.prepare(
-            "SELECT course_name, time_slot "
+            "SELECT course_name, time_slot, weekday "
             "FROM schedules "
-            "WHERE room_name = ? AND weekday = ? AND start_time > ? "
-            "ORDER BY start_time LIMIT 1"
+            "WHERE room_name = ? AND (weekday > ? OR (weekday = ? AND start_time > ?)) "
+            "ORDER BY weekday ASC, start_time ASC LIMIT 1"
         );
         nextQuery.addBindValue(currentRoomName);
+        nextQuery.addBindValue(currentWeekday);
         nextQuery.addBindValue(currentWeekday);
         nextQuery.addBindValue(currentEndTime);
         
         if(nextQuery.exec() && nextQuery.next()) {
-            lblNextCourse->setText("下节预告: " + nextQuery.value(0).toString() + " (" + nextQuery.value(1).toString() + ")");
+            QString nextCourseName = nextQuery.value(0).toString();
+            QString nextTimeSlot = nextQuery.value(1).toString();
+            int nextWeekday = nextQuery.value(2).toInt();
+            
+            QString dayName;
+            switch(nextWeekday) {
+                case 1: dayName = "周一"; break;
+                case 2: dayName = "周二"; break;
+                case 3: dayName = "周三"; break;
+                case 4: dayName = "周四"; break;
+                case 5: dayName = "周五"; break;
+                case 6: dayName = "周六"; break;
+                case 7: dayName = "周日"; break;
+                default: dayName = "未知"; break;
+            }
+            
+            lblNextCourse->setText("下节预告: " + nextCourseName + " (" + dayName + " " + nextTimeSlot + ")");
         } else {
             lblNextCourse->setText("下节预告: 无");
         }
     } else {
         // 当前时间没有课，查找下一节课（start_time > 当前时间）
         query.prepare(
-            "SELECT course_name, teacher, time_slot, start_time "
+            "SELECT course_name, teacher, time_slot, start_time, weekday "
             "FROM schedules "
-            "WHERE room_name = ? AND weekday = ? AND start_time > ? "
-            "ORDER BY start_time LIMIT 1"
+            "WHERE room_name = ? AND (weekday > ? OR (weekday = ? AND start_time > ?)) "
+            "ORDER BY weekday ASC, start_time ASC LIMIT 1"
         );
         query.addBindValue(currentRoomName);
+        query.addBindValue(currentWeekday);
         query.addBindValue(currentWeekday);
         query.addBindValue(currentTime);
         
         if(query.exec() && query.next()) {
             // 显示下一节课
+            QString nextCourseName = query.value(0).toString();
+            QString nextTimeSlot = query.value(2).toString();
+            int nextWeekday = query.value(4).toInt();
+            
+            QString dayName;
+            switch(nextWeekday) {
+                case 1: dayName = "周一"; break;
+                case 2: dayName = "周二"; break;
+                case 3: dayName = "周三"; break;
+                case 4: dayName = "周四"; break;
+                case 5: dayName = "周五"; break;
+                case 6: dayName = "周六"; break;
+                case 7: dayName = "周日"; break;
+                default: dayName = "未知"; break;
+            }
+            
             lblCourseName->setText("当前无课");
             lblTeacher->setText("");
             lblTime->setText("");
-            lblNextCourse->setText("下节预告: " + query.value(0).toString() + " (" + query.value(2).toString() + ")");
+            lblNextCourse->setText("下节预告: " + nextCourseName + " (" + dayName + " " + nextTimeSlot + ")");
         } else {
             // 今天没有更多课程了
             lblCourseName->setText("当前无课");

@@ -9,21 +9,30 @@
 #include <QHostAddress>
 #include <QObject>
 #include <QDataStream>
+#include <QApplication>
+#include <QHeaderView>
+#include <QTableWidgetItem>
+#include <QTimer>
 
 ServerWindow::ServerWindow(QWidget *parent) : QWidget(parent)
 {
     setWindowTitle("校园服务器 (Port: 12345)");
-    resize(400, 300);
-
-    logViewer = new QTextEdit(this);
-    logViewer->setReadOnly(true);
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->addWidget(logViewer);
-
+    resize(1200, 800);
+    
+    setupUi();
+    
     // 1. 初始化数据库
     initDb();
-
-    // 2. 启动 TCP 监听
+    
+    // 2. 刷新数据显示
+    refreshData();
+    
+    // 3. 设置定时器更新当前上课班级信息（每分钟更新一次）
+    classUpdateTimer = new QTimer(this);
+    connect(classUpdateTimer, &QTimer::timeout, this, &ServerWindow::updateCurrentClasses);
+    classUpdateTimer->start(60000); // 每分钟更新一次
+    
+    // 4. 启动 TCP 监听
     tcpServer = new QTcpServer(this);
     connect(tcpServer, &QTcpServer::newConnection, this, &ServerWindow::onNewConnection);
 
@@ -50,35 +59,174 @@ void ServerWindow::initDb() {
     // 创建表（如果不存在）
     QSqlQuery query(db);
     query.exec("CREATE TABLE IF NOT EXISTS master_schedules ("
+               "id INTEGER PRIMARY KEY AUTOINCREMENT, "
                "room TEXT, course TEXT, teacher TEXT, time_slot TEXT, "
                "start_time TEXT, end_time TEXT, weekday INTEGER, is_next INTEGER)");
 
-    query.exec("CREATE TABLE IF NOT EXISTS classrooms ("
-               "room_name TEXT, class_name TEXT, capacity INTEGER, building TEXT, floor INTEGER)");
+    // 检查并更新 classrooms 表结构
+    query.exec("PRAGMA table_info(classrooms)");
+    bool hasIdColumn = false;
+    bool tableExists = query.next(); // 如果有结果，说明表存在
+    
+    if(tableExists) {
+        // 遍历所有列信息，检查是否存在 id 列
+        do {
+            if(query.value(1).toString() == "id") {
+                hasIdColumn = true;
+                break;
+            }
+        } while(query.next());
+        
+        // 如果表存在但没有 id 列，则添加它
+        if(!hasIdColumn) {
+            logViewer->append("检测到旧版 classrooms 表，正在更新表结构...");
+            
+            // 重命名原表
+            query.exec("ALTER TABLE classrooms RENAME TO classrooms_old");
+            
+            // 创建新表结构
+            query.exec("CREATE TABLE classrooms ("
+                       "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                       "room_name TEXT, class_name TEXT, capacity INTEGER, building TEXT, floor INTEGER, current_class TEXT)");
+            
+            // 从旧表复制数据到新表（跳过可能存在的 id 列）
+            query.exec("INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) "
+                       "SELECT room_name, class_name, capacity, building, floor, current_class FROM classrooms_old");
+            
+            // 删除旧表
+            query.exec("DROP TABLE classrooms_old");
+            
+            logViewer->append("classrooms 表结构更新完成");
+        }
+    } else {
+        // 如果表不存在，创建新表
+        query.exec("CREATE TABLE IF NOT EXISTS classrooms ("
+                   "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                   "room_name TEXT, class_name TEXT, capacity INTEGER, building TEXT, floor INTEGER, current_class TEXT)");
+    }
 
     query.exec("CREATE TABLE IF NOT EXISTS announcements ("
                "title TEXT, content TEXT, priority INTEGER, publish_time TEXT, expire_time TEXT)");
 
     // 检查是否有数据，如果没有则自动初始化
     query.exec("SELECT COUNT(*) FROM master_schedules");
-    if (query.next() && query.value(0).toInt() == 0) {
-        logViewer->append("数据库为空，开始自动初始化示例数据...");
+    int scheduleCount = 0;
+    if (query.next()) {
+        scheduleCount = query.value(0).toInt();
+    }
+    
+    query.exec("SELECT COUNT(*) FROM classrooms");
+    int classroomCount = 0;
+    if (query.next()) {
+        classroomCount = query.value(0).toInt();
+    }
+    
+    if (scheduleCount == 0 || classroomCount == 0) {
+        logViewer->append("数据库为空或数据不完整，开始自动初始化示例数据...");
         initSampleData();
         
         // 再次检查
         query.exec("SELECT COUNT(*) FROM master_schedules");
         if (query.next()) {
+            scheduleCount = query.value(0).toInt();
             logViewer->append("初始化完成，课程表记录数: " + query.value(0).toString());
         }
+        
+        query.exec("SELECT COUNT(*) FROM classrooms");
+        if (query.next()) {
+            classroomCount = query.value(0).toInt();
+            logViewer->append("初始化完成，教室信息记录数: " + query.value(0).toString());
+        }
     } else {
-        logViewer->append("服务端数据库已连接，现有记录数: " + query.value(0).toString());
+        logViewer->append("服务端数据库已连接，课程表记录数: " + QString::number(scheduleCount) + ", 教室记录数: " + QString::number(classroomCount));
     }
+    
+    // 确保界面刷新显示最新数据
+    if(classroomCount > 0) {
+        populateClassroomsTable();
+    }
+    if(scheduleCount > 0) {
+        populateSchedulesTable();
+    }
+}
+
+void ServerWindow::setupUi() {
+    // 创建主布局
+    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    
+    // 创建标签页控件
+    dataTabWidget = new QTabWidget();
+    
+    // 课程表页面
+    QWidget *schedulesPage = new QWidget();
+    QVBoxLayout *schedulesLayout = new QVBoxLayout(schedulesPage);
+    schedulesTable = new QTableWidget();
+    schedulesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    schedulesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    schedulesLayout->addWidget(schedulesTable);
+    dataTabWidget->addTab(schedulesPage, "课程表");
+    
+    // 教室信息页面
+    QWidget *classroomsPage = new QWidget();
+    QVBoxLayout *classroomsLayout = new QVBoxLayout(classroomsPage);
+    classroomsTable = new QTableWidget();
+    classroomsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    classroomsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    classroomsLayout->addWidget(classroomsTable);
+    dataTabWidget->addTab(classroomsPage, "教室信息");
+    
+    // 公告页面
+    QWidget *announcementsPage = new QWidget();
+    QVBoxLayout *announcementsLayout = new QVBoxLayout(announcementsPage);
+    announcementsTable = new QTableWidget();
+    announcementsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    announcementsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    announcementsLayout->addWidget(announcementsTable);
+    dataTabWidget->addTab(announcementsPage, "公告");
+    
+    // 日志区域
+    logViewer = new QTextEdit();
+    logViewer->setReadOnly(true);
+    logViewer->setMaximumHeight(200);
+    
+    // 刷新按钮
+    refreshButton = new QPushButton("刷新数据");
+    clearFilterButton = new QPushButton("清除筛选");
+    weekDayFilterCombo = new QComboBox();
+    weekDayFilterCombo->addItem("全部", -1); // -1 表示显示所有数据
+    weekDayFilterCombo->addItem("星期一", 1);
+    weekDayFilterCombo->addItem("星期二", 2);
+    weekDayFilterCombo->addItem("星期三", 3);
+    weekDayFilterCombo->addItem("星期四", 4);
+    weekDayFilterCombo->addItem("星期五", 5);
+    weekDayFilterCombo->addItem("星期六", 6);
+    weekDayFilterCombo->addItem("星期日", 7);
+    
+    statusLabel = new QLabel("就绪");
+    
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    buttonLayout->addWidget(new QLabel("筛选:"));
+    buttonLayout->addWidget(weekDayFilterCombo);
+    buttonLayout->addWidget(refreshButton);
+    buttonLayout->addWidget(clearFilterButton);
+    buttonLayout->addWidget(statusLabel);
+    buttonLayout->addStretch();
+    
+    connect(refreshButton, &QPushButton::clicked, this, &ServerWindow::refreshData);
+    connect(clearFilterButton, &QPushButton::clicked, this, [=]() {
+        weekDayFilterCombo->setCurrentIndex(0); // 选择“全部”
+        filterSchedulesByWeekday();
+    });
+    connect(weekDayFilterCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ServerWindow::onWeekDayFilterChanged);
+    
+    // 组装主布局
+    mainLayout->addWidget(dataTabWidget);
+    mainLayout->addLayout(buttonLayout);
+    mainLayout->addWidget(logViewer);
 }
 
 void ServerWindow::initSampleData() {
     QSqlQuery query(db);
-    QDateTime now = QDateTime::currentDateTime();
-    int currentWeekday = now.date().dayOfWeek(); // 1=周一, 7=周日
     
     // 定义一天的课程时间表（共 5 节课）
     struct TimeSlot {
@@ -238,51 +386,53 @@ void ServerWindow::initSampleData() {
         {"行政法学", "白教授"}
     };
     
-    // 为每个教室生成课程记录
-    for (auto it = coursesPerRoom.constBegin(); it != coursesPerRoom.constEnd(); ++it) {
-        QString roomName = it.key();
-        QVector<CourseTemplate> courses = it.value();
-        
-        for (int i = 0; i < qMin(courses.size(), timeSlots.size()); ++i) {
-            QString sql = QString(
-                "INSERT INTO master_schedules "
-                "(room, course, teacher, time_slot, start_time, end_time, weekday, is_next) "
-                "VALUES ('%1', '%2', '%3', '%4', '%5', '%6', %7, 0)"
-            ).arg(
-                roomName,
-                courses[i].name,
-                courses[i].teacher,
-                timeSlots[i].display,
-                timeSlots[i].start,
-                timeSlots[i].end,
-                QString::number(currentWeekday)
-            );
+    // 仅为工作日生成课程记录（星期一到星期五，即1到5）
+    for (int weekday = 1; weekday <= 5; ++weekday) {
+        for (auto it = coursesPerRoom.constBegin(); it != coursesPerRoom.constEnd(); ++it) {
+            QString roomName = it.key();
+            QVector<CourseTemplate> courses = it.value();
             
-            if (!query.exec(sql)) {
-                logViewer->append("插入课程失败: " + query.lastError().text());
+            for (int i = 0; i < qMin(courses.size(), timeSlots.size()); ++i) {
+                QString sql = QString(
+                    "INSERT INTO master_schedules "
+                    "(room, course, teacher, time_slot, start_time, end_time, weekday, is_next) "
+                    "VALUES ('%1', '%2', '%3', '%4', '%5', '%6', %7, 0)"
+                ).arg(
+                    roomName,
+                    courses[i].name,
+                    courses[i].teacher,
+                    timeSlots[i].display,
+                    timeSlots[i].start,
+                    timeSlots[i].end,
+                    QString::number(weekday)
+                );
+                
+                if (!query.exec(sql)) {
+                    logViewer->append("插入课程失败: " + query.lastError().text());
+                }
             }
         }
     }
     
-    logViewer->append(QString("已生成 %1 个教室的课程表，每个教室 5 节课").arg(coursesPerRoom.size()));
+    logViewer->append(QString("已生成 %1 个教室的课程表，每天 5 节课，共一周 5 个工作日").arg(coursesPerRoom.size()));
     
     // 插入教室信息（15条）
     QStringList classrooms;
-    classrooms << "INSERT INTO classrooms VALUES ('Class 101', '计算机科学2023级1班', 50, 'A栋', 3)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 102', '计算机科学2023级2班', 45, 'A栋', 3)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 103', '软件工程2023级1班', 60, 'B栋', 2)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 104', '软件工程2023级2班', 55, 'B栋', 2)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 105', '人工智能2023级1班', 40, 'C栋', 4)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 201', '数据科学2023级1班', 50, 'A栋', 2)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 202', '数据科学2023级2班', 45, 'A栋', 2)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 203', '网络安奨2023级1班', 40, 'B栋', 3)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 204', '网络安奨2023级2班', 40, 'B栋', 3)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 205', '物联网2023级1班', 55, 'C栋', 2)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 301', '计算机科学2024级1班', 50, 'A栋', 4)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 302', '计算机科学2024级2班', 45, 'A栋', 4)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 303', '软件工程2024级1班', 60, 'B栋', 1)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 304', '软件工程2024级2班', 55, 'B栋', 1)";
-    classrooms << "INSERT INTO classrooms VALUES ('Class 305', '人工智能2024级1班', 40, 'C栋', 3)";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 101', '计算机科学2023级1班', 50, 'A栋', 3, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 102', '计算机科学2023级2班', 45, 'A栋', 3, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 103', '软件工程2023级1班', 60, 'B栋', 2, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 104', '软件工程2023级2班', 55, 'B栋', 2, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 105', '人工智能2023级1班', 40, 'C栋', 4, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 201', '数据科学2023级1班', 50, 'A栋', 2, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 202', '数据科学2023级2班', 45, 'A栋', 2, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 203', '网络安奨2023级1班', 40, 'B栋', 3, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 204', '网络安奨2023级2班', 40, 'B栋', 3, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 205', '物联网2023级1班', 55, 'C栋', 2, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 301', '计算机科学2024级1班', 50, 'A栋', 4, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 302', '计算机科学2024级2班', 45, 'A栋', 4, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 303', '软件工程2024级1班', 60, 'B栋', 1, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 304', '软件工程2024级2班', 55, 'B栋', 1, '')";
+    classrooms << "INSERT INTO classrooms (room_name, class_name, capacity, building, floor, current_class) VALUES ('Class 305', '人工智能2024级1班', 40, 'C栋', 3, '')";
     
     for (const QString &sql : classrooms) {
         if (!query.exec(sql)) {
@@ -291,6 +441,7 @@ void ServerWindow::initSampleData() {
     }
     
     // 插入公告（3条）
+    QDateTime now = QDateTime::currentDateTime();
     QString publishTime = now.toString("yyyy-MM-dd HH:mm:ss");
     QString expireTime1 = now.addDays(30).toString("yyyy-MM-dd HH:mm:ss");
     QString expireTime2 = now.addDays(7).toString("yyyy-MM-dd HH:mm:ss");
@@ -308,13 +459,224 @@ void ServerWindow::initSampleData() {
     }
     
     logViewer->append("示例数据初始化完成：30条课程 + 15个教室 + 3条公告");
+    
+    // 初始化后更新当前上课班级信息
+    updateCurrentClasses();
+}
+
+void ServerWindow::updateCurrentClasses() {
+    // 清空当前班级信息
+    QSqlQuery clearQuery(db);
+    clearQuery.exec("UPDATE classrooms SET current_class = ''");
+    
+    // 根据当前时间获取正在上课的课程
+    QTime currentTime = QTime::currentTime();
+    QDate currentDate = QDate::currentDate();
+    int currentWeekday = currentDate.dayOfWeek(); // 1=Monday, 7=Sunday
+    
+    QSqlQuery query(db);
+    QString sql = QString(
+        "SELECT room, course, teacher FROM master_schedules WHERE weekday = %1 AND "
+        "time(start_time) <= time('%2') AND time(end_time) >= time('%2')")
+        .arg(currentWeekday)
+        .arg(currentTime.toString("hh:mm:ss"));
+    
+    if (query.exec(sql)) {
+        while (query.next()) {
+            QString roomName = query.value(0).toString();
+            QString courseName = query.value(1).toString();
+            QString teacherName = query.value(2).toString();
+            
+            // 更新教室的当前班级信息
+            QSqlQuery updateQuery(db);
+            QString updateSql = QString(
+                "UPDATE classrooms SET current_class = '%1' WHERE room_name = '%2'")
+                .arg(courseName + " (" + teacherName + ")")
+                .arg(roomName);
+            updateQuery.exec(updateSql);
+            
+            logViewer->append(QString("教室 %1 正在上课: %2").arg(roomName, courseName));
+        }
+    }
+}
+
+void ServerWindow::refreshData() {
+    if(!db.isOpen()) {
+        logViewer->append("数据库未打开，无法刷新数据");
+        statusLabel->setText("数据库错误");
+        return;
+    }
+    
+    statusLabel->setText("正在刷新数据...");
+    QApplication::processEvents(); // 确保UI更新
+    
+    populateSchedulesTable();
+    populateClassroomsTable();
+    populateAnnouncementsTable();
+    
+    statusLabel->setText("数据刷新完成");
+}
+
+void ServerWindow::populateSchedulesTable() {
+    // 默认显示全部数据
+    weekDayFilterCombo->setCurrentIndex(0); // 选择“全部”
+    filterSchedulesByWeekday();
+}
+
+void ServerWindow::populateClassroomsTable() {
+    QSqlQuery query(db);
+    if (!query.exec("SELECT room_name, class_name, capacity, building, floor, current_class FROM classrooms ORDER BY room_name")) {
+        logViewer->append("查询教室信息失败: " + query.lastError().text());
+        return;
+    }
+    
+    // 获取行数
+    int rowCount = 0;
+    QSqlQuery countQuery(db);
+    countQuery.exec("SELECT COUNT(*) FROM classrooms");
+    if (countQuery.next()) {
+        rowCount = countQuery.value(0).toInt();
+    }
+    
+    classroomsTable->setRowCount(rowCount);
+    classroomsTable->setColumnCount(6);
+    classroomsTable->setHorizontalHeaderLabels({"教室名称", "班级名称", "容量", "楼栋", "楼层", "当前班级"});
+    
+    int row = 0;
+    while (query.next()) {
+        classroomsTable->setItem(row, 0, new QTableWidgetItem(query.value(0).toString()));
+        classroomsTable->setItem(row, 1, new QTableWidgetItem(query.value(1).toString()));
+        classroomsTable->setItem(row, 2, new QTableWidgetItem(QString::number(query.value(2).toInt())));
+        classroomsTable->setItem(row, 3, new QTableWidgetItem(query.value(3).toString()));
+        classroomsTable->setItem(row, 4, new QTableWidgetItem(QString::number(query.value(4).toInt())));
+        classroomsTable->setItem(row, 5, new QTableWidgetItem(query.value(5).toString()));
+        row++;
+    }
+    
+    // 调整列宽
+    classroomsTable->resizeColumnsToContents();
+    logViewer->append("教室信息数据已加载: " + QString::number(rowCount) + " 条记录");
+}
+
+void ServerWindow::populateAnnouncementsTable() {
+    QSqlQuery query(db);
+    if (!query.exec("SELECT title, content, priority, publish_time, expire_time FROM announcements ORDER BY priority DESC, publish_time DESC")) {
+        logViewer->append("查询公告失败: " + query.lastError().text());
+        return;
+    }
+    
+    // 获取行数
+    int rowCount = 0;
+    QSqlQuery countQuery(db);
+    countQuery.exec("SELECT COUNT(*) FROM announcements");
+    if (countQuery.next()) {
+        rowCount = countQuery.value(0).toInt();
+    }
+    
+    announcementsTable->setRowCount(rowCount);
+    announcementsTable->setColumnCount(5);
+    announcementsTable->setHorizontalHeaderLabels({"标题", "内容", "优先级", "发布时间", "过期时间"});
+    
+    int row = 0;
+    while (query.next()) {
+        announcementsTable->setItem(row, 0, new QTableWidgetItem(query.value(0).toString()));
+        QTableWidgetItem *contentItem = new QTableWidgetItem(query.value(1).toString());
+        contentItem->setToolTip(query.value(1).toString()); // 设置工具提示以显示完整内容
+        announcementsTable->setItem(row, 1, contentItem);
+        announcementsTable->setItem(row, 2, new QTableWidgetItem(QString::number(query.value(2).toInt())));
+        announcementsTable->setItem(row, 3, new QTableWidgetItem(query.value(3).toString()));
+        announcementsTable->setItem(row, 4, new QTableWidgetItem(query.value(4).toString()));
+        row++;
+    }
+    
+    // 调整列宽
+    announcementsTable->resizeColumnsToContents();
+    // 对于内容列限制宽度并允许换行显示
+    announcementsTable->setColumnWidth(1, 300);
+    logViewer->append("公告数据已加载: " + QString::number(rowCount) + " 条记录");
+}
+
+void ServerWindow::onWeekDayFilterChanged() {
+    filterSchedulesByWeekday();
+}
+
+void ServerWindow::filterSchedulesByWeekday() {
+    int selectedWeekDay = weekDayFilterCombo->currentData().toInt();
+    
+    QSqlQuery query(db);
+    QString sql = "SELECT room, course, teacher, time_slot, start_time, end_time, weekday, is_next FROM master_schedules ";
+    
+    if (selectedWeekDay != -1) { // -1 表示显示全部
+        sql += QString("WHERE weekday = %1 ").arg(selectedWeekDay);
+    }
+    sql += "ORDER BY room, weekday, start_time";
+    
+    if (!query.exec(sql)) {
+        logViewer->append("筛选课程表失败: " + query.lastError().text());
+        return;
+    }
+    
+    // 获取行数
+    int rowCount = 0;
+    QSqlQuery countQuery(db);
+    QString countSql = "SELECT COUNT(*) FROM master_schedules ";
+    if (selectedWeekDay != -1) {
+        countSql += QString("WHERE weekday = %1").arg(selectedWeekDay);
+    }
+    
+    if (countQuery.exec(countSql)) {
+        if (countQuery.next()) {
+            rowCount = countQuery.value(0).toInt();
+        }
+    }
+    
+    schedulesTable->setRowCount(rowCount);
+    schedulesTable->setColumnCount(8);
+    schedulesTable->setHorizontalHeaderLabels({"教室", "课程", "教师", "时间段", "开始时间", "结束时间", "星期", "是否下一节"});
+    
+    int row = 0;
+    while (query.next()) {
+        schedulesTable->setItem(row, 0, new QTableWidgetItem(query.value(0).toString()));
+        schedulesTable->setItem(row, 1, new QTableWidgetItem(query.value(1).toString()));
+        schedulesTable->setItem(row, 2, new QTableWidgetItem(query.value(2).toString()));
+        schedulesTable->setItem(row, 3, new QTableWidgetItem(query.value(3).toString()));
+        schedulesTable->setItem(row, 4, new QTableWidgetItem(query.value(4).toString()));
+        schedulesTable->setItem(row, 5, new QTableWidgetItem(query.value(5).toString()));
+        schedulesTable->setItem(row, 6, new QTableWidgetItem(QString::number(query.value(6).toInt())));
+        schedulesTable->setItem(row, 7, new QTableWidgetItem(QString::number(query.value(7).toInt())));
+        row++;
+    }
+    
+    // 调整列宽
+    schedulesTable->resizeColumnsToContents();
+    
+    if (selectedWeekDay == -1) {
+        logViewer->append("课程表数据已加载: " + QString::number(rowCount) + " 条记录（全部星期）");
+    } else {
+        QString weekDayStr;
+        switch (selectedWeekDay) {
+        case 1: weekDayStr = "星期一"; break;
+        case 2: weekDayStr = "星期二"; break;
+        case 3: weekDayStr = "星期三"; break;
+        case 4: weekDayStr = "星期四"; break;
+        case 5: weekDayStr = "星期五"; break;
+        case 6: weekDayStr = "星期六"; break;
+        case 7: weekDayStr = "星期日"; break;
+        default: weekDayStr = QString::number(selectedWeekDay); break;
+        }
+        logViewer->append("课程表数据已加载: " + QString::number(rowCount) + " 条记录（" + weekDayStr + "）");
+    }
 }
 
 void ServerWindow::onNewConnection() {
     QTcpSocket *clientSocket = tcpServer->nextPendingConnection();
     connect(clientSocket, &QTcpSocket::readyRead, this, &ServerWindow::onReadClientData);
+    connect(clientSocket, &QTcpSocket::disconnected, this, &ServerWindow::onClientDisconnected);
     connect(clientSocket, &QTcpSocket::disconnected, clientSocket, &QTcpSocket::deleteLater);
 
+    // 将socket存储起来，便于后续管理和清理
+    clientSockets.insert(clientSocket);
+    
     logViewer->append("客户端已连接: " + clientSocket->peerAddress().toString());
 }
 
@@ -322,39 +684,74 @@ void ServerWindow::onReadClientData() {
     QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
     if (!socket) return;
 
-    QByteArray request = socket->readAll();
-    logViewer->append("收到请求: " + request);
-    logViewer->append("正在准备发送数据...");
+    // 检查是否有数据可读
+    if (socket->bytesAvailable() == 0) {
+        return; // 如果没有数据可读，则直接返回
+    }
+    
+    // 读取数据
+    QByteArray requestData = socket->readAll();
+    QString requestStr = QString::fromUtf8(requestData);
+    logViewer->append("收到请求: " + requestStr);
+    
+    // 验证请求内容，只有特定请求才返回数据
+    if (requestStr.trimmed().isEmpty() || requestStr.contains("GET_SCHEDULE", Qt::CaseInsensitive) || requestStr.contains("SYNC", Qt::CaseInsensitive)) {
+        logViewer->append("正在准备发送数据...");
 
-    QByteArray responseData = getScheduleJson();
+        QByteArray responseData = getScheduleJson();
 
-    logViewer->append("数据大小: " + QString::number(responseData.size()) + " 字节");
+        logViewer->append("数据大小: " + QString::number(responseData.size()) + " 字节");
 
-    QByteArray sizeData;
-    QDataStream ds(&sizeData, QIODevice::WriteOnly);
-    ds.setByteOrder(QDataStream::BigEndian);
-    ds << static_cast<quint32>(responseData.size());
+        // 先发送数据大小（4字节，大端序），再发送实际数据
+        QByteArray sizeData;
+        QDataStream ds(&sizeData, QIODevice::WriteOnly);
+        ds.setByteOrder(QDataStream::BigEndian);
+        ds << static_cast<quint32>(responseData.size());
 
-    qint64 bytesWritten = socket->write(sizeData);
-    bytesWritten += socket->write(responseData);
-    socket->flush();
+        // 发送数据大小信息
+        qint64 sizeBytesWritten = socket->write(sizeData);
+        if (sizeBytesWritten != 4) {
+            logViewer->append("发送数据大小信息失败");
+            return;
+        }
 
-    logViewer->append("已写入 " + QString::number(bytesWritten) + " 字节");
+        // 发送实际数据
+        qint64 dataBytesWritten = socket->write(responseData);
+        if (dataBytesWritten != responseData.size()) {
+            logViewer->append("发送数据失败，期望发送" + QString::number(responseData.size()) + "字节，实际发送" + QString::number(dataBytesWritten) + "字节");
+            return;
+        }
+        
+        socket->flush();
 
-    if (socket->waitForBytesWritten(5000)) {
-        logViewer->append("数据已完全发送，等待客户端断开连接...");
+        qint64 totalBytesWritten = sizeBytesWritten + dataBytesWritten;
+        logViewer->append("已写入 " + QString::number(totalBytesWritten) + " 字节");
+
+        if (socket->waitForBytesWritten(5000)) {
+            logViewer->append("数据已完全发送，等待客户端断开连接...");
+        } else {
+            logViewer->append("数据发送超时");
+        }
     } else {
-        logViewer->append("数据发送超时");
+        logViewer->append("无效请求: " + requestStr + ", 拒绝发送数据");
+        // 对无效请求立即断开连接以防止滥用
+        socket->disconnectFromHost();
     }
 }
 
 QByteArray ServerWindow::getScheduleJson() {
+    if(!db.isOpen()) {
+        logViewer->append("数据库未打开，无法获取数据");
+        return QJsonDocument(QJsonObject()).toJson();
+    }
+    
     QJsonObject rootObj;
 
     QJsonArray schedulesArray;
     QSqlQuery schedulesQuery(db);
     if (!schedulesQuery.exec("SELECT room, course, teacher, time_slot, start_time, end_time, weekday, is_next FROM master_schedules")) {
         logViewer->append("查询课程表失败: " + schedulesQuery.lastError().text());
+        return QJsonDocument(QJsonObject()).toJson(); // 返回空JSON
     }
     while (schedulesQuery.next()) {
         QJsonObject obj;
@@ -373,8 +770,9 @@ QByteArray ServerWindow::getScheduleJson() {
 
     QJsonArray classroomsArray;
     QSqlQuery classroomsQuery(db);
-    if (!classroomsQuery.exec("SELECT room_name, class_name, capacity, building, floor FROM classrooms")) {
+    if (!classroomsQuery.exec("SELECT room_name, class_name, capacity, building, floor, current_class FROM classrooms")) {
         logViewer->append("查询教室信息失败: " + classroomsQuery.lastError().text());
+        return QJsonDocument(QJsonObject()).toJson(); // 返回空JSON
     }
     while (classroomsQuery.next()) {
         QJsonObject obj;
@@ -383,6 +781,7 @@ QByteArray ServerWindow::getScheduleJson() {
         obj["capacity"] = classroomsQuery.value(2).toInt();
         obj["building"] = classroomsQuery.value(3).toString();
         obj["floor"] = classroomsQuery.value(4).toInt();
+        obj["current_class"] = classroomsQuery.value(5).toString();
         classroomsArray.append(obj);
     }
     logViewer->append("教室信息记录数: " + QString::number(classroomsArray.size()));
@@ -392,6 +791,7 @@ QByteArray ServerWindow::getScheduleJson() {
     QSqlQuery announcementsQuery(db);
     if (!announcementsQuery.exec("SELECT title, content, priority, publish_time, expire_time FROM announcements")) {
         logViewer->append("查询公告失败: " + announcementsQuery.lastError().text());
+        return QJsonDocument(QJsonObject()).toJson(); // 返回空JSON
     }
     while (announcementsQuery.next()) {
         QJsonObject obj;
@@ -410,4 +810,12 @@ QByteArray ServerWindow::getScheduleJson() {
     logViewer->append("JSON数据预览: " + jsonData.left(100) + "...");
     
     return jsonData;
+}
+
+void ServerWindow::onClientDisconnected() {
+    QTcpSocket *socket = qobject_cast<QTcpSocket*>(sender());
+    if (socket && clientSockets.contains(socket)) {
+        clientSockets.remove(socket);
+        logViewer->append("客户端已断开连接: " + socket->peerAddress().toString());
+    }
 }
