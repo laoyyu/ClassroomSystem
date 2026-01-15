@@ -1,7 +1,16 @@
 import sqlite3
 from datetime import datetime, timedelta
+import os
 
-db_path = 'server_data.db'
+# 使用程序实际运行时的数据库路径
+db_path = 'build/Desktop_Qt_6_9_2_MSVC2022_64bit-Debug/server_data.db'
+
+# 如果 build 目录不存在，使用当前目录
+if not os.path.exists(os.path.dirname(db_path)):
+    db_path = 'server_data.db'
+    print(f'警告: build 目录不存在，使用当前目录: {db_path}')
+else:
+    print(f'使用 build 目录数据库: {db_path}')
 
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()

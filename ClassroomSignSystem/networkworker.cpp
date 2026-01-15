@@ -8,16 +8,23 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QThread>
+#include <QDataStream>
 
-NetworkWorker::NetworkWorker(QObject *parent) : QObject(parent)
+NetworkWorker::NetworkWorker(QObject *parent) : QObject(parent), expectedDataSize(0), receivingData(false)
 {
     socket = new QTcpSocket(this);
     retryTimer = new QTimer(this);
+    receiveTimer = new QTimer(this);
+
+    socket->setReadBufferSize(50 * 1024 * 1024);
 
     connect(socket, &QTcpSocket::connected, this, &NetworkWorker::onConnected);
     connect(socket, &QTcpSocket::readyRead, this, &NetworkWorker::onReadyRead);
     connect(socket, &QTcpSocket::errorOccurred, this, &NetworkWorker::onError);
     connect(retryTimer, &QTimer::timeout, this, &NetworkWorker::connectToServer);
+    connect(receiveTimer, &QTimer::timeout, this, &NetworkWorker::onReceiveTimeout);
+
+    receiveTimer->setSingleShot(true);
 }
 
 void NetworkWorker::startSync() {
@@ -40,27 +47,119 @@ void NetworkWorker::connectToServer() {
 
 void NetworkWorker::onConnected() {
     qDebug() << "已连接服务器，发送同步请求...";
-    // 发送简单指令，触发服务器返回数据
+
+    // 重置接收状态
+    buffer.clear();
+    expectedDataSize = 0;
+    receivingData = true;
+
+    // 启动接收超时定时器（30秒）
+    receiveTimer->start(30000);
+
     socket->write("GET_SCHEDULE");
+    socket->flush();
+    qDebug() << "请求已发送";
 }
 
 void NetworkWorker::onReadyRead() {
-    buffer.append(socket->readAll());
-    qDebug() << "接收到数据，当前缓冲区大小:" << buffer.size();
+    if (!receivingData) {
+        qDebug() << "警告：在非接收状态下收到数据，忽略";
+        return;
+    }
 
-    if (buffer.endsWith('\n')) {
-        qDebug() << "数据接收完成，开始解析...";
-        qDebug() << "接收到的JSON数据:" << buffer;
-        updateLocalDb(buffer);
-        buffer.clear();
+    QByteArray data = socket->readAll();
+    buffer.append(data);
+    qDebug() << "接收到数据，本次接收:" << data.size() << "字节，当前缓冲区大小:" << buffer.size();
+
+    // 重置接收超时计时器（有新数据到达）
+    receiveTimer->start(30000);
+
+    // 解析长度头（4字节大端 quint32）
+    if (expectedDataSize == 0 && buffer.size() >= 4) {
+        // 使用临时缓冲区解析长度，避免直接操作 buffer
+        QByteArray sizeHeader = buffer.left(4);
+        QDataStream ds(sizeHeader);
+        ds.setByteOrder(QDataStream::BigEndian);
+        quint32 size;
+        ds >> size;
+        expectedDataSize = static_cast<qint32>(size);
+        qDebug() << "预期数据大小:" << expectedDataSize << "字节";
+
+        // 移除长度头
+        buffer.remove(0, 4);
+        qDebug() << "移除头部后缓冲区大小:" << buffer.size() << "字节";
+    }
+
+    // 检查是否接收完整
+    if (expectedDataSize > 0 && buffer.size() >= expectedDataSize) {
+        // 停止超时计时器
+        receiveTimer->stop();
+
+        QByteArray jsonData = buffer.left(expectedDataSize);
+        qDebug() << "数据接收完成，实际接收:" << jsonData.size() << "字节，预期:" << expectedDataSize << "字节";
+        qDebug() << "Socket状态:" << socket->state();
+
+        // 处理数据
+        updateLocalDb(jsonData);
+
+        // 清理状态
+        buffer.remove(0, expectedDataSize);
+        expectedDataSize = 0;
+        receivingData = false;
+
+        qDebug() << "准备断开连接...";
         socket->disconnectFromHost();
+    } else if (expectedDataSize > 0) {
+        qDebug() << "等待更多数据，已接收:" << buffer.size() << "字节，需要:" << expectedDataSize << "字节"
+                 << "，剩余:" << (expectedDataSize - buffer.size()) << "字节";
     }
 }
 
 void NetworkWorker::onError(QAbstractSocket::SocketError socketError) {
     Q_UNUSED(socketError);
     qDebug() << "网络错误/服务器离线，保持本地数据显示。Error:" << socket->errorString();
-    socket->abort();
+    qDebug() << "Socket状态:" << socket->state();
+
+    // 停止接收超时计时器
+    receiveTimer->stop();
+    receivingData = false;
+
+    if (socket->state() != QAbstractSocket::UnconnectedState) {
+        socket->disconnectFromHost();
+    }
+}
+
+void NetworkWorker::onReceiveTimeout() {
+    qDebug() << "警告：数据接收超时！已接收:" << buffer.size() << "字节，预期:" << expectedDataSize << "字节";
+
+    // 清理状态
+    buffer.clear();
+    expectedDataSize = 0;
+    receivingData = false;
+
+    // 断开连接
+    if (socket->state() != QAbstractSocket::UnconnectedState) {
+        socket->disconnectFromHost();
+    }
+}
+
+QSqlDatabase NetworkWorker::getDatabase()
+{
+    const QString connectionName = "NetworkWorkerConnection";
+
+    QSqlDatabase db;
+    if (QSqlDatabase::contains(connectionName)) {
+        db = QSqlDatabase::database(connectionName);
+    } else {
+        db = QSqlDatabase::addDatabase("QSQLITE", connectionName);
+        db.setDatabaseName("classroom.db");
+    }
+
+    if (!db.isOpen() && !db.open()) {
+        qDebug() << "NetworkWorker 线程中数据库打开失败:" << db.lastError().text();
+    }
+
+    return db;
 }
 
 void NetworkWorker::updateLocalDb(const QByteArray &jsonData) {
@@ -106,17 +205,33 @@ void NetworkWorker::updateLocalDb(const QByteArray &jsonData) {
 
 void NetworkWorker::saveSchedules(const QJsonArray &array) {
     qDebug() << "开始保存课程表数据...";
-    QSqlDatabase db = QSqlDatabase::database();
-    if (!db.isOpen()) {
-        qDebug() << "数据库未打开";
+    QSqlDatabase db = getDatabase();
+    if (!db.isValid() || !db.isOpen()) {
+        qDebug() << "NetworkWorker 线程中数据库不可用";
         return;
     }
 
     db.transaction();
 
     QSqlQuery query(db);
-    query.exec("DELETE FROM schedules");
-    qDebug() << "已清空课程表数据";
+    
+    // 删除旧表
+    query.exec("DROP TABLE IF EXISTS schedules");
+    qDebug() << "已删除旧的课程表";
+    
+    // 重新创建表结构
+    if (!query.exec("CREATE TABLE schedules ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "room_name TEXT, "
+                    "course_name TEXT, "
+                    "teacher TEXT, "
+                    "time_slot TEXT, "
+                    "is_next INTEGER DEFAULT 0)")) {
+        qDebug() << "创建课程表失败:" << query.lastError().text();
+        db.rollback();
+        return;
+    }
+    qDebug() << "已重新创建课程表";
 
     QString sql = "INSERT INTO schedules (room_name, course_name, teacher, time_slot, is_next) VALUES (?, ?, ?, ?, ?)";
     query.prepare(sql);
@@ -150,17 +265,33 @@ void NetworkWorker::saveSchedules(const QJsonArray &array) {
 
 void NetworkWorker::saveClassrooms(const QJsonArray &array) {
     qDebug() << "开始保存教室数据...";
-    QSqlDatabase db = QSqlDatabase::database();
-    if (!db.isOpen()) {
-        qDebug() << "数据库未打开";
+    QSqlDatabase db = getDatabase();
+    if (!db.isValid() || !db.isOpen()) {
+        qDebug() << "NetworkWorker 线程中数据库不可用";
         return;
     }
 
     db.transaction();
 
     QSqlQuery query(db);
-    query.exec("DELETE FROM classrooms");
-    qDebug() << "已清空教室数据";
+    
+    // 删除旧表
+    query.exec("DROP TABLE IF EXISTS classrooms");
+    qDebug() << "已删除旧的教室表";
+    
+    // 重新创建表结构
+    if (!query.exec("CREATE TABLE classrooms ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "room_name TEXT UNIQUE, "
+                    "class_name TEXT, "
+                    "capacity INTEGER, "
+                    "building TEXT, "
+                    "floor INTEGER)")) {
+        qDebug() << "创建教室表失败:" << query.lastError().text();
+        db.rollback();
+        return;
+    }
+    qDebug() << "已重新创建教室表";
 
     QString sql = "INSERT INTO classrooms (room_name, class_name, capacity, building, floor) VALUES (?, ?, ?, ?, ?)";
     query.prepare(sql);
@@ -192,17 +323,33 @@ void NetworkWorker::saveClassrooms(const QJsonArray &array) {
 
 void NetworkWorker::saveAnnouncements(const QJsonArray &array) {
     qDebug() << "开始保存公告数据...";
-    QSqlDatabase db = QSqlDatabase::database();
-    if (!db.isOpen()) {
-        qDebug() << "数据库未打开";
+    QSqlDatabase db = getDatabase();
+    if (!db.isValid() || !db.isOpen()) {
+        qDebug() << "NetworkWorker 线程中数据库不可用";
         return;
     }
 
     db.transaction();
 
     QSqlQuery query(db);
-    query.exec("DELETE FROM announcements");
-    qDebug() << "已清空公告数据";
+    
+    // 删除旧表
+    query.exec("DROP TABLE IF EXISTS announcements");
+    qDebug() << "已删除旧的公告表";
+    
+    // 重新创建表结构
+    if (!query.exec("CREATE TABLE announcements ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "title TEXT, "
+                    "content TEXT, "
+                    "priority INTEGER DEFAULT 0, "
+                    "publish_time TEXT, "
+                    "expire_time TEXT)")) {
+        qDebug() << "创建公告表失败:" << query.lastError().text();
+        db.rollback();
+        return;
+    }
+    qDebug() << "已重新创建公告表";
 
     QString sql = "INSERT INTO announcements (title, content, priority, publish_time, expire_time) VALUES (?, ?, ?, ?, ?)";
     query.prepare(sql);

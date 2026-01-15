@@ -21,6 +21,7 @@ private slots:
 
 private:
     void initDb();                // 初始化服务端数据库
+    void initSampleData();        // 初始化示例数据
     QByteArray getScheduleJson(); // 从数据库获取数据并转为JSON
 
     QTcpServer *tcpServer;

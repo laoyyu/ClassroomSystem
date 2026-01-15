@@ -222,7 +222,11 @@ void MainWindow::startWorker() {
 void MainWindow::onDataSynced(const QString &msg) {
     lblStatus->setText(msg);
 
+    // 清除过滤条件，避免之前的过滤影响新数据
+    model->setFilter("");
     model->select();
+    
+    classroomModel->setFilter("");
     classroomModel->select();
 
     loadClassrooms();
@@ -269,8 +273,15 @@ void MainWindow::updateDisplay(const QString &roomName) {
 }
 
 void MainWindow::filterData(const QString &text) {
-    QString filterStr = QString("room_name LIKE '%%1%' OR teacher LIKE '%%1%' OR course_name LIKE '%%1%'").arg(text);
-    model->setFilter(filterStr);
+    if (text.isEmpty()) {
+        // 搜索框为空，显示所有数据
+        model->setFilter("");
+    } else {
+        // 正确的 SQL LIKE 语法：使用 % 作为通配符
+        QString filterStr = QString("room_name LIKE '%%1%' OR teacher LIKE '%%1%' OR course_name LIKE '%%1%'").arg(text);
+        model->setFilter(filterStr);
+    }
+    model->select();
 }
 
 void MainWindow::updateCurrentTime() {
