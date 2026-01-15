@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
 
     DatabaseManager::initSampleData();
 
-    w.setWindowTitle("智慧教室班牌系统 v1.0 (Qt6 + MV + DB + Thread)");
+    w.setWindowTitle("智慧教室班牌系统");
     w.show();
 
     qDebug() << "开始事件循环...";
